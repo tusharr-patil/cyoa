@@ -3,7 +3,9 @@ package cyoa
 import (
 	"encoding/json"
 	"io"
+	"log"
 	"net/http"
+	"strings"
 	"text/template"
 )
 
@@ -35,19 +37,56 @@ var defaultHandlerTmpl = `
 </body>
 </html>`
 
-func NewHandler(s Story) http.Handler {
-	return handler{s}
+type HandlerOption func(h *handler)
+
+// custom template
+func WithTemplate(t *template.Template) HandlerOption {
+	return func(h *handler) {
+		h.t = t
+	}
+}
+
+// custom path
+func WithPathFn(fn func(r *http.Request) string) HandlerOption {
+	return func(h *handler) {
+		h.pathFn = fn
+	}
+}
+
+func NewHandler(s Story, opts ...HandlerOption) http.Handler {
+	h := handler{s, tmpl, defaultPathFn}
+	for _, opt := range opts {
+		opt(&h)
+	}
+	return h
 }
 
 type handler struct {
-	s Story
+	s      Story
+	t      *template.Template
+	pathFn func(r *http.Request) string
+}
+
+func defaultPathFn(r *http.Request) string {
+	path := strings.TrimSpace(r.URL.Path)
+	if path == "" || path == "/" {
+		path = "/intro"
+	}
+	return path[1:]
 }
 
 func (h handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	err := tmpl.Execute(w, h.s["intro"])
-	if err != nil {
-		panic(err)
+	path := h.pathFn(r)
+	if chapter, ok := h.s[path]; ok {
+		err := h.t.Execute(w, chapter)
+		if err != nil {
+			log.Printf("%v", err)
+			http.Error(w, "Something went wrong...", http.StatusInternalServerError)
+		}
+		return
 	}
+	http.Error(w, "Chapter not found.", http.StatusNotFound)
+
 }
 
 func JsonStory(r io.Reader) (Story, error) {
